@@ -1,0 +1,26 @@
+{
+  "name": "chuoikhoi",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "clean": "hardhat clean",
+    "compile": "hardhat compile",
+    "deploy:cronos": "hardhat ignition deploy ./ignition/modules/Voting.ts --network cronosTestnet",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@nomicfoundation/hardhat-ignition": "^3.0.7",
+    "@nomicfoundation/hardhat-toolbox-viem": "^5.0.2",
+    "@types/node": "^22.19.7",
+    "forge-std": "github:foundry-rs/forge-std#v1.9.4",
+    "hardhat": "^3.1.5",
+    "dotenv": "^16.4.7",
+    "typescript": "~5.8.0",
+    "viem": "^2.44.4"
+  },
+  "type": "module"
+}
