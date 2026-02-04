@@ -3,7 +3,7 @@ import { ethers } from "ethers";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import "./App.css";
 
-const CONTRACT_ADDRESS = process.env.REACT_APP_CONTRACT_ADDRESS || "";
+const DEFAULT_CONTRACT = process.env.REACT_APP_CONTRACT_ADDRESS || "";
 const API_BASE = process.env.REACT_APP_API_BASE || "http://localhost:4000";
 const RPC_URL = process.env.REACT_APP_RPC_URL || "https://evm-t3.cronos.org";
 const EXPLORER = "https://explorer.cronos.org/testnet";
@@ -44,6 +44,10 @@ function formatDate(ts) {
 
 function App() {
   const [wallet, setWallet] = useState("");
+  const [contractAddress, setContractAddress] = useState(DEFAULT_CONTRACT);
+  const [privateKey, setPrivateKey] = useState("");
+  const [signer, setSigner] = useState(null);
+  const [usingPrivateKey, setUsingPrivateKey] = useState(false);
   const [owner, setOwner] = useState("");
   const [polls, setPolls] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -56,17 +60,22 @@ function App() {
   const explorerTx = useMemo(() => (txHash ? `${EXPLORER}/tx/${txHash}` : ""), [txHash]);
 
   const fetchPolls = useCallback(async () => {
+    if (!contractAddress) {
+      setPolls([]);
+      setMessage("Nhập địa chỉ hợp đồng để tải dữ liệu.");
+      return;
+    }
     setLoading(true);
     setMessage("");
     try {
-      const res = await axios.get(`${API_BASE}/polls`);
+      const res = await axios.get(`${API_BASE}/polls`, { params: { address: contractAddress } });
       setPolls(res.data.polls || []);
     } catch (err) {
       setMessage("Không tải được dữ liệu từ backend.");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [contractAddress]);
 
   useEffect(() => {
     fetchPolls();
@@ -85,38 +94,56 @@ function App() {
 
   const connectWallet = useCallback(async () => {
     try {
+      if (privateKey.trim()) {
+        const provider = new ethers.JsonRpcProvider(RPC_URL);
+        const walletSigner = new ethers.Wallet(privateKey.trim(), provider);
+        setSigner(walletSigner);
+        setWallet(walletSigner.address);
+        setUsingPrivateKey(true);
+
+        if (contractAddress) {
+          const contract = new ethers.Contract(contractAddress, contractAbi, provider);
+          const chainOwner = await contract.owner();
+          setOwner(chainOwner.toLowerCase());
+        }
+        setMessage("Đã kết nối bằng khóa bí mật (chỉ lưu trong bộ nhớ).");
+        return;
+      }
+
       await ensureCronos();
       const [account] = await window.ethereum.request({ method: "eth_requestAccounts" });
-      setWallet(account);
+      const provider = new ethers.BrowserProvider(window.ethereum);
+      const signerFromMetaMask = await provider.getSigner();
 
-      if (CONTRACT_ADDRESS) {
-        const provider = new ethers.BrowserProvider(window.ethereum);
-        const contract = new ethers.Contract(CONTRACT_ADDRESS, contractAbi, provider);
+      setSigner(signerFromMetaMask);
+      setWallet(account);
+      setUsingPrivateKey(false);
+
+      if (contractAddress) {
+        const contract = new ethers.Contract(contractAddress, contractAbi, provider);
         const chainOwner = await contract.owner();
         setOwner(chainOwner.toLowerCase());
       }
     } catch (err) {
       setMessage(err.message || "Không thể kết nối ví");
     }
-  }, [ensureCronos]);
+  }, [contractAddress, ensureCronos, privateKey]);
 
   const vote = useCallback(
     async (pollId, optionId) => {
-      if (!CONTRACT_ADDRESS) {
-        setMessage("Chưa cấu hình CONTRACT_ADDRESS");
+      if (!contractAddress) {
+        setMessage("Chưa nhập địa chỉ hợp đồng");
         return;
       }
-      if (!window.ethereum) {
-        setMessage("Cần MetaMask để bình chọn");
+      if (!signer) {
+        setMessage("Cần kết nối ví trước");
         return;
       }
 
       try {
         setVotingId(pollId);
-        await ensureCronos();
-        const provider = new ethers.BrowserProvider(window.ethereum);
-        const signer = await provider.getSigner();
-        const contract = new ethers.Contract(CONTRACT_ADDRESS, contractAbi, signer);
+        if (!usingPrivateKey) await ensureCronos();
+        const contract = new ethers.Contract(contractAddress, contractAbi, signer);
 
         const tx = await contract.vote(pollId, optionId);
         setTxHash(tx.hash);
@@ -130,17 +157,17 @@ function App() {
         setVotingId(null);
       }
     },
-    [ensureCronos, fetchPolls]
+    [contractAddress, ensureCronos, fetchPolls, signer, usingPrivateKey]
   );
 
   const createPoll = useCallback(
     async (evt) => {
       evt.preventDefault();
-      if (!CONTRACT_ADDRESS) {
-        setMessage("Chưa cấu hình CONTRACT_ADDRESS");
+      if (!contractAddress) {
+        setMessage("Chưa nhập địa chỉ hợp đồng");
         return;
       }
-      if (!wallet) {
+      if (!wallet || !signer) {
         setMessage("Cần kết nối ví để tạo poll");
         return;
       }
@@ -160,10 +187,8 @@ function App() {
 
       try {
         setCreating(true);
-        await ensureCronos();
-        const provider = new ethers.BrowserProvider(window.ethereum);
-        const signer = await provider.getSigner();
-        const contract = new ethers.Contract(CONTRACT_ADDRESS, contractAbi, signer);
+        if (!usingPrivateKey) await ensureCronos();
+        const contract = new ethers.Contract(contractAddress, contractAbi, signer);
 
         const tx = await contract.createPoll(newPoll.title, newPoll.description, optionList, startTime, endTime);
         setTxHash(tx.hash);
@@ -178,9 +203,15 @@ function App() {
         setCreating(false);
       }
     },
-    [ensureCronos, fetchPolls, newPoll, wallet]
+    [contractAddress, ensureCronos, fetchPolls, newPoll, signer, usingPrivateKey, wallet]
   );
-  const canCreate = !!CONTRACT_ADDRESS;
+  const canCreate = !!contractAddress;
+
+  const applyInputs = (evt) => {
+    evt.preventDefault();
+    setMessage("Đã lưu địa chỉ hợp đồng và khóa bí mật tạm thời trong phiên.");
+    fetchPolls();
+  };
 
   return (
     <div className="page">
@@ -191,20 +222,43 @@ function App() {
           <p className="lead">
             Kết nối MetaMask, bỏ phiếu on-chain và theo dõi giao dịch ngay trên Cronos Explorer.
           </p>
+          <form className="form-grid" onSubmit={applyInputs} style={{ marginTop: 10 }}>
+            <label>
+              Địa chỉ hợp đồng
+              <input
+                value={contractAddress}
+                onChange={(e) => setContractAddress(e.target.value.trim())}
+                placeholder="0x..."
+              />
+            </label>
+            <label>
+              Khóa bí mật (tùy chọn)
+              <input
+                type="password"
+                value={privateKey}
+                onChange={(e) => setPrivateKey(e.target.value.trim())}
+                placeholder="0x..."
+              />
+              <span className="hint">Chỉ lưu trong bộ nhớ trình duyệt hiện tại.</span>
+            </label>
+            <div className="actions" style={{ marginTop: 6 }}>
+              <button className="primary" type="submit">Lưu / Áp dụng</button>
+              <button className="ghost" type="button" onClick={fetchPolls} disabled={loading}>
+                Làm mới dữ liệu
+              </button>
+            </div>
+          </form>
           <div className="actions">
             <button className="primary" onClick={connectWallet}>
-              {wallet ? "Đã kết nối ví" : "Kết nối MetaMask"}
-            </button>
-            <button className="ghost" onClick={fetchPolls} disabled={loading}>
-              Làm mới dữ liệu
+              {wallet ? "Đã kết nối ví" : "Kết nối ví"}
             </button>
           </div>
           <div className="meta">
             <span>Ví: {wallet ? shorten(wallet) : "Chưa kết nối"}</span>
             <span>
-              Hợp đồng: {CONTRACT_ADDRESS ? (
-                <a href={`${EXPLORER}/address/${CONTRACT_ADDRESS}`} target="_blank" rel="noreferrer">
-                  {shorten(CONTRACT_ADDRESS)}
+              Hợp đồng: {contractAddress ? (
+                <a href={`${EXPLORER}/address/${contractAddress}`} target="_blank" rel="noreferrer">
+                  {shorten(contractAddress)}
                 </a>
               ) : (
                 "Chưa cấu hình"
@@ -212,6 +266,7 @@ function App() {
             </span>
             {owner && <span>Chủ hợp đồng: {shorten(owner)}</span>}
             <span>Quyền: Mọi người đều có thể tạo & bình chọn</span>
+            {usingPrivateKey && <span>Đang dùng khóa bí mật cục bộ</span>}
           </div>
           {message && <div className="toast">{message}</div>}
           {explorerTx && (

@@ -18,7 +18,7 @@ app.use((req, _res, next) => {
 });
 
 const rpcUrl = process.env.CRONOS_TESTNET_RPC_URL || "https://evm-t3.cronos.org";
-const contractAddress = process.env.CONTRACT_ADDRESS;
+const envContractAddress = process.env.CONTRACT_ADDRESS;
 const port = process.env.PORT || 4000;
 
 const cronosTestnet = defineChain({
@@ -47,7 +47,11 @@ function deriveState(poll) {
   return "live";
 }
 
-async function readPoll(pollId) {
+function getContractAddress(req) {
+  return (req.query.address || "").trim() || envContractAddress;
+}
+
+async function readPoll(pollId, contractAddress) {
   const [title, description, options, votes, startTime, endTime, active, creator] =
     await client.readContract({
       address: contractAddress,
@@ -75,10 +79,12 @@ app.get("/health", (_req, res) => {
   res.json({ status: "ok" });
 });
 
-app.get("/polls", async (_req, res) => {
+app.get("/polls", async (req, res) => {
+  const contractAddress = getContractAddress(req);
+
   if (!contractAddress) {
-    console.error("Missing CONTRACT_ADDRESS in .env at", envPath);
-    return res.status(500).json({ error: "Missing CONTRACT_ADDRESS in .env" });
+    console.error("Missing CONTRACT_ADDRESS (env or query) at", envPath);
+    return res.status(500).json({ error: "Missing CONTRACT_ADDRESS" });
   }
 
   try {
@@ -89,7 +95,7 @@ app.get("/polls", async (_req, res) => {
 
     console.log("Total polls:", total);
     const ids = Array.from({ length: total }, (_, i) => i);
-    const polls = await Promise.all(ids.map((id) => readPoll(id)));
+    const polls = await Promise.all(ids.map((id) => readPoll(id, contractAddress)));
 
     res.json({ total, polls, chainId: cronosTestnet.id, rpcUrl });
   } catch (err) {
@@ -99,15 +105,17 @@ app.get("/polls", async (_req, res) => {
 });
 
 app.get("/polls/:id", async (req, res) => {
+  const contractAddress = getContractAddress(req);
+
   if (!contractAddress) {
-    return res.status(500).json({ error: "Missing CONTRACT_ADDRESS in .env" });
+    return res.status(500).json({ error: "Missing CONTRACT_ADDRESS" });
   }
 
   const pollId = Number(req.params.id);
 
   try {
     console.log(`Reading poll ${pollId} from`, contractAddress);
-    const poll = await readPoll(pollId);
+    const poll = await readPoll(pollId, contractAddress);
     res.json(poll);
   } catch (err) {
     console.error(`/polls/${pollId}`, err);
